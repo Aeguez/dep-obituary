@@ -26,7 +26,6 @@ const riskConfig = {
     text: "text-red-300",
     border: "border-red-800",
     bg: "bg-red-950/35",
-    circle: "bg-red-500/15 text-red-300 ring-red-500/30",
     bar: "bg-red-500",
   },
   high: {
@@ -34,7 +33,6 @@ const riskConfig = {
     text: "text-orange-300",
     border: "border-orange-800",
     bg: "bg-orange-950/30",
-    circle: "bg-orange-500/15 text-orange-300 ring-orange-500/30",
     bar: "bg-orange-500",
   },
   medium: {
@@ -42,7 +40,6 @@ const riskConfig = {
     text: "text-yellow-300",
     border: "border-yellow-800",
     bg: "bg-yellow-950/25",
-    circle: "bg-yellow-500/15 text-yellow-300 ring-yellow-500/30",
     bar: "bg-yellow-500",
   },
   low: {
@@ -50,7 +47,6 @@ const riskConfig = {
     text: "text-sky-300",
     border: "border-sky-800",
     bg: "bg-sky-950/20",
-    circle: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
     bar: "bg-sky-500",
   },
   healthy: {
@@ -58,7 +54,6 @@ const riskConfig = {
     text: "text-emerald-300",
     border: "border-emerald-800",
     bg: "bg-emerald-950/20",
-    circle: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
     bar: "bg-emerald-500",
   },
 } satisfies Record<ScoreResult["riskLevel"], Record<string, string>>;
@@ -197,7 +192,7 @@ function PackageRow({
         className="grid w-full grid-cols-[auto,1fr] gap-4 px-4 py-4 text-left transition-colors hover:bg-zinc-800/50 md:grid-cols-[auto,1fr,auto]"
       >
         <span
-          className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold ring-1 ${config.circle}`}
+          className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold ring-1 ${getScoreCircleColor(pkg.score)}`}
         >
           {pkg.score}
         </span>
@@ -215,7 +210,7 @@ function PackageRow({
         </span>
 
         <span className="col-span-2 flex items-center justify-between gap-4 text-sm text-zinc-400 md:col-span-1 md:block md:text-right">
-          <span className="text-xs uppercase text-zinc-500 md:block">Last release</span>
+          <span className="text-xs uppercase text-zinc-500 md:block">Days since release</span>
           <span className="md:mt-1 md:block">{formatReleaseAge(pkg.metrics.daysSinceLastRelease)}</span>
         </span>
       </button>
@@ -253,7 +248,15 @@ function PackageRow({
 
 function formatReleaseAge(days: number) {
   if (days >= 9999) return "Unknown";
-  if (days === 0) return "Today";
-  if (days < 365) return `${days}d ago`;
-  return `${(days / 365).toFixed(1)}y ago`;
+  if (days === 0) return "0 days";
+  if (days === 1) return "1 day";
+  if (days < 365) return `${days} days`;
+  return `${days} days (${(days / 365).toFixed(1)}y)`;
+}
+
+function getScoreCircleColor(score: number) {
+  if (score < 20) return "bg-red-500/15 text-red-300 ring-red-500/30";
+  if (score < 40) return "bg-orange-500/15 text-orange-300 ring-orange-500/30";
+  if (score < 60) return "bg-yellow-500/15 text-yellow-300 ring-yellow-500/30";
+  return "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30";
 }

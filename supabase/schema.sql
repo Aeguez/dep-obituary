@@ -4,7 +4,7 @@
 -- Stores cached package scan results (avoids re-hitting APIs for 24h)
 CREATE TABLE IF NOT EXISTS package_cache (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  package_name TEXT NOT NULL UNIQUE,
+  package_name TEXT NOT NULL,
   ecosystem TEXT NOT NULL DEFAULT 'npm', -- 'npm' | 'pypi'
   score INTEGER NOT NULL,
   risk_level TEXT NOT NULL,
@@ -13,11 +13,27 @@ CREATE TABLE IF NOT EXISTS package_cache (
   summary TEXT,
   alternative_suggestion TEXT,
   cached_at TIMESTAMPTZ DEFAULT NOW(),
-  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '24 hours'
+  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '24 hours',
+  UNIQUE(package_name, ecosystem)
 );
 
-CREATE INDEX idx_package_cache_name ON package_cache(package_name);
+CREATE INDEX idx_package_cache_name ON package_cache(package_name, ecosystem);
 CREATE INDEX idx_package_cache_expires ON package_cache(expires_at);
+
+-- Migration guard for earlier schemas that cached by package_name only.
+ALTER TABLE package_cache DROP CONSTRAINT IF EXISTS package_cache_package_name_key;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'package_cache_package_name_ecosystem_key'
+  ) THEN
+    ALTER TABLE package_cache
+      ADD CONSTRAINT package_cache_package_name_ecosystem_key UNIQUE (package_name, ecosystem);
+  END IF;
+END $$;
 
 -- Stores full scan sessions (for sharing and history)
 CREATE TABLE IF NOT EXISTS scans (
