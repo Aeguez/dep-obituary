@@ -1,0 +1,20 @@
+{
+  "name": "Dependency Obituary",
+  "url": "https://dep-obituary.vercel.app",
+  "hook_attributes": {
+    "url": "https://dep-obituary.vercel.app/api/github/webhook",
+    "active": true
+  },
+  "redirect_url": "https://dep-obituary.vercel.app/api/github/callback",
+  "callback_urls": [
+    "https://dep-obituary.vercel.app/api/github/callback"
+  ],
+  "public": false,
+  "default_permissions": {
+    "contents": "read",
+    "pull_requests": "write"
+  },
+  "default_events": [
+    "pull_request"
+  ]
+}
