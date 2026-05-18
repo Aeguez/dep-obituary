@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { fetchNpmMetrics, parsePackageJson } from "@/lib/fetchers";
 import { calculateScore, type ScoreResult } from "@/lib/scorer";
 
@@ -65,12 +65,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing GitHub App installation id" }, { status: 400 });
   }
 
+  const installationId = payload.installation.id;
+
+  after(async () => {
+    try {
+      await scanPullRequestAndComment(payload, installationId);
+    } catch (error) {
+      console.error("GitHub webhook scan failed:", error);
+    }
+  });
+
+  return NextResponse.json({ ok: true, queued: true });
+}
+
+async function scanPullRequestAndComment(payload: PullRequestWebhookPayload, installationId: number) {
   try {
-    const installationToken = await createInstallationAccessToken(payload.installation.id);
+    const installationToken = await createInstallationAccessToken(installationId);
     const packageJson = await fetchPullRequestPackageJson(payload, installationToken);
 
     if (!packageJson) {
-      return NextResponse.json({ ok: true, skipped: "No package.json found on PR branch" });
+      return;
     }
 
     const dependencies = parsePackageJson(packageJson).slice(0, MAX_DEPENDENCIES);
@@ -80,22 +94,12 @@ export async function POST(req: NextRequest) {
       .sort((a, b) => a.score - b.score);
 
     if (riskyPackages.length === 0) {
-      return NextResponse.json({ ok: true, skipped: "No high or critical packages found" });
+      return;
     }
 
     await postPullRequestComment(payload, installationToken, buildRiskComment(riskyPackages));
-
-    return NextResponse.json({
-      ok: true,
-      commented: true,
-      riskyPackageCount: riskyPackages.length,
-    });
   } catch (error) {
-    console.error("GitHub webhook scan failed:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Webhook scan failed" },
-      { status: 500 }
-    );
+    console.error("GitHub PR scan failed:", error);
   }
 }
 
