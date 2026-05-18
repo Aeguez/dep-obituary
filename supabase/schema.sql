@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS monitored_repos (
 -- Historical score snapshots for trend graphs (Week 3)
 CREATE TABLE IF NOT EXISTS score_history (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id TEXT,
+  repo_id UUID REFERENCES monitored_repos(id) ON DELETE CASCADE,
   package_name TEXT NOT NULL,
   score INTEGER NOT NULL,
   risk_level TEXT NOT NULL,
@@ -75,6 +77,10 @@ CREATE TABLE IF NOT EXISTS score_history (
 );
 
 CREATE INDEX idx_score_history_package ON score_history(package_name, recorded_at DESC);
+
+ALTER TABLE score_history ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE score_history ADD COLUMN IF NOT EXISTS repo_id UUID REFERENCES monitored_repos(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_score_history_repo ON score_history(repo_id, recorded_at DESC);
 
 -- RLS Policies (enable Row Level Security)
 ALTER TABLE scans ENABLE ROW LEVEL SECURITY;
