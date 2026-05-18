@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { fetchNpmMetrics, parsePackageJson } from "@/lib/fetchers";
-import { calculateScore, type ScoreResult } from "@/lib/scorer";
+import { parsePackageJson } from "@/lib/fetchers";
+import type { PackageMetrics, ScoreResult } from "@/lib/scorer";
 
 const GITHUB_API = "https://api.github.com";
 const API_VERSION = "2026-03-10";
@@ -110,7 +110,7 @@ async function scanPullRequestAndComment(payload: PullRequestWebhookPayload, ins
     return { skipped: "No dependency changes found" };
   }
 
-  const results = await scanDependencies(packageNames, installationToken);
+  const results = await scanDependencies(packageNames);
   const riskyPackages = results
     .filter((result) => result.riskLevel === "critical" || result.riskLevel === "high")
     .sort((a, b) => a.score - b.score);
@@ -234,24 +234,82 @@ function getChangedDependencyNames(headPackageJson: string, basePackageJson: str
     .map((dep) => dep.name);
 }
 
-async function scanDependencies(packageNames: string[], githubToken: string) {
+async function scanDependencies(packageNames: string[]) {
   const results: ScoreResult[] = [];
-  const chunkSize = 5;
 
-  for (let i = 0; i < packageNames.length; i += chunkSize) {
-    const chunk = packageNames.slice(i, i + chunkSize);
-    const chunkResults = await Promise.allSettled(
-      chunk.map(async (packageName) => calculateScore(await fetchNpmMetrics(packageName, githubToken)))
-    );
-
-    for (const result of chunkResults) {
-      if (result.status === "fulfilled") {
-        results.push(result.value);
-      }
-    }
+  for (const packageName of packageNames) {
+    const result = await scanNpmPackageForPullRequest(packageName);
+    if (result) results.push(result);
   }
 
   return results;
+}
+
+async function scanNpmPackageForPullRequest(packageName: string) {
+  const registryResponse = await fetch(
+    `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(4_000),
+    }
+  );
+
+  if (!registryResponse.ok) return null;
+
+  const registry = await registryResponse.json();
+  const latestVersion = registry["dist-tags"]?.latest;
+  const latestMeta = latestVersion ? registry.versions?.[latestVersion] || {} : {};
+  const deprecatedMessage = latestMeta.deprecated;
+
+  if (!deprecatedMessage) return null;
+
+  const lastReleaseDate = latestVersion ? registry.time?.[latestVersion] || null : null;
+  const daysSinceLastRelease = lastReleaseDate
+    ? Math.floor((Date.now() - new Date(lastReleaseDate).getTime()) / 86400000)
+    : 9999;
+
+  const metrics: PackageMetrics = {
+    name: packageName,
+    repoOwner: null,
+    repoName: null,
+    commitsLast90Days: 0,
+    daysSinceLastRelease,
+    maintainersCount: registry.maintainers?.length || 1,
+    openIssues: 0,
+    closedIssues: 0,
+    weeklyDownloads: 0,
+    downloadTrend: 0,
+    isArchived: false,
+    isDeprecated: true,
+    lastReleaseDate,
+    alternativeSuggestion: null,
+  };
+
+  return {
+    name: packageName,
+    score: 0,
+    riskLevel: "critical",
+    breakdown: {
+      commits: { score: 0, weight: 0.3, label: "Package is deprecated" },
+      lastRelease: {
+        score: 0,
+        weight: 0.25,
+        label: formatLastReleaseIssue(daysSinceLastRelease),
+      },
+      maintainers: { score: 0, weight: 0.2, label: "No active maintenance expected" },
+      issueRatio: { score: 0, weight: 0.15, label: "Deprecated package" },
+      downloads: { score: 0, weight: 0.1, label: "Migration recommended" },
+    },
+    metrics,
+    summary: `This package is deprecated: ${deprecatedMessage}`,
+    alternativeSuggestion: null,
+  } satisfies ScoreResult;
+}
+
+function formatLastReleaseIssue(days: number) {
+  if (days >= 9999) return "Last release unknown";
+  if (days < 365) return `Last release ${days} days ago`;
+  return `Last release ${(days / 365).toFixed(1)} years ago`;
 }
 
 async function postPullRequestComment(
