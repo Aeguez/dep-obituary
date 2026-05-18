@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { fetchNpmMetrics, parsePackageJson } from "@/lib/fetchers";
 import { calculateScore, type ScoreResult } from "@/lib/scorer";
 
@@ -70,57 +70,66 @@ export async function POST(req: NextRequest) {
 
   const installationId = payload.installation.id;
 
-  after(async () => {
-    try {
-      await scanPullRequestAndComment(payload, installationId);
-    } catch (error) {
-      console.error("GitHub webhook scan failed:", error);
-    }
-  });
-
-  return NextResponse.json({ ok: true, queued: true });
+  try {
+    const scanResult = await scanPullRequestAndComment(payload, installationId);
+    return NextResponse.json({ ok: true, ...scanResult });
+  } catch (error) {
+    console.error("GitHub webhook scan failed:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Webhook scan failed" },
+      { status: 500 }
+    );
+  }
 }
 
 async function scanPullRequestAndComment(payload: PullRequestWebhookPayload, installationId: number) {
-  try {
-    const installationToken = await createInstallationAccessToken(installationId);
-    const packageJson = await fetchPackageJson(
-      payload.pull_request.head.repo?.full_name || payload.repository.full_name,
-      payload.pull_request.head.sha || payload.pull_request.head.ref,
-      installationToken
-    );
+  const installationToken = await createInstallationAccessToken(installationId);
+  const packageJson = await fetchPackageJson(
+    payload.pull_request.head.repo?.full_name || payload.repository.full_name,
+    payload.pull_request.head.sha || payload.pull_request.head.ref,
+    installationToken
+  );
 
-    if (!packageJson) {
-      return;
-    }
-
-    const basePackageJson = await fetchPackageJson(
-      payload.repository.full_name,
-      payload.pull_request.base.sha,
-      installationToken
-    );
-    const packageNames = getChangedDependencyNames(packageJson, basePackageJson).slice(
-      0,
-      MAX_DEPENDENCIES
-    );
-
-    if (packageNames.length === 0) {
-      return;
-    }
-
-    const results = await scanDependencies(packageNames, installationToken);
-    const riskyPackages = results
-      .filter((result) => result.riskLevel === "critical" || result.riskLevel === "high")
-      .sort((a, b) => a.score - b.score);
-
-    if (riskyPackages.length === 0) {
-      return;
-    }
-
-    await postPullRequestComment(payload, installationToken, buildRiskComment(riskyPackages));
-  } catch (error) {
-    console.error("GitHub PR scan failed:", error);
+  if (!packageJson) {
+    return { skipped: "No package.json found on PR branch" };
   }
+
+  const basePackageJson = await fetchPackageJson(
+    payload.repository.full_name,
+    payload.pull_request.base.sha,
+    installationToken
+  );
+  const packageNames = getChangedDependencyNames(packageJson, basePackageJson).slice(
+    0,
+    MAX_DEPENDENCIES
+  );
+
+  console.log("Dependency Obituary changed dependencies:", packageNames);
+
+  if (packageNames.length === 0) {
+    return { skipped: "No dependency changes found" };
+  }
+
+  const results = await scanDependencies(packageNames, installationToken);
+  const riskyPackages = results
+    .filter((result) => result.riskLevel === "critical" || result.riskLevel === "high")
+    .sort((a, b) => a.score - b.score);
+
+  console.log(
+    "Dependency Obituary risky packages:",
+    riskyPackages.map((result) => `${result.name}:${result.riskLevel}:${result.score}`)
+  );
+
+  if (riskyPackages.length === 0) {
+    return { skipped: "No high or critical packages found", scannedPackageCount: results.length };
+  }
+
+  await postPullRequestComment(payload, installationToken, buildRiskComment(riskyPackages));
+  return {
+    commented: true,
+    scannedPackageCount: results.length,
+    riskyPackageCount: riskyPackages.length,
+  };
 }
 
 function verifyGitHubSignature(rawBody: string, signatureHeader: string | null) {
