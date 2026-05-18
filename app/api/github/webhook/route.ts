@@ -24,6 +24,9 @@ interface PullRequestWebhookPayload {
   };
   pull_request: {
     number: number;
+    base: {
+      sha: string;
+    };
     head: {
       ref: string;
       sha: string;
@@ -81,14 +84,31 @@ export async function POST(req: NextRequest) {
 async function scanPullRequestAndComment(payload: PullRequestWebhookPayload, installationId: number) {
   try {
     const installationToken = await createInstallationAccessToken(installationId);
-    const packageJson = await fetchPullRequestPackageJson(payload, installationToken);
+    const packageJson = await fetchPackageJson(
+      payload.pull_request.head.repo?.full_name || payload.repository.full_name,
+      payload.pull_request.head.sha || payload.pull_request.head.ref,
+      installationToken
+    );
 
     if (!packageJson) {
       return;
     }
 
-    const dependencies = parsePackageJson(packageJson).slice(0, MAX_DEPENDENCIES);
-    const results = await scanDependencies(dependencies.map((dep) => dep.name), installationToken);
+    const basePackageJson = await fetchPackageJson(
+      payload.repository.full_name,
+      payload.pull_request.base.sha,
+      installationToken
+    );
+    const packageNames = getChangedDependencyNames(packageJson, basePackageJson).slice(
+      0,
+      MAX_DEPENDENCIES
+    );
+
+    if (packageNames.length === 0) {
+      return;
+    }
+
+    const results = await scanDependencies(packageNames, installationToken);
     const riskyPackages = results
       .filter((result) => result.riskLevel === "critical" || result.riskLevel === "high")
       .sort((a, b) => a.score - b.score);
@@ -174,13 +194,8 @@ function githubHeaders(token: string, accept = "application/vnd.github+json") {
   };
 }
 
-async function fetchPullRequestPackageJson(
-  payload: PullRequestWebhookPayload,
-  token: string
-) {
-  const repoFullName = payload.pull_request.head.repo?.full_name || payload.repository.full_name;
+async function fetchPackageJson(repoFullName: string, ref: string, token: string) {
   const [owner, repo] = repoFullName.split("/");
-  const ref = payload.pull_request.head.sha || payload.pull_request.head.ref;
   const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
     repo
   )}/contents/package.json?ref=${encodeURIComponent(ref)}`;
@@ -195,6 +210,19 @@ async function fetchPullRequestPackageJson(
   }
 
   return response.text();
+}
+
+function getChangedDependencyNames(headPackageJson: string, basePackageJson: string | null) {
+  const headDependencies = parsePackageJson(headPackageJson);
+  if (!basePackageJson) return headDependencies.map((dep) => dep.name);
+
+  const baseVersions = new Map(
+    parsePackageJson(basePackageJson).map((dep) => [`${dep.type}:${dep.name}`, dep.version])
+  );
+
+  return headDependencies
+    .filter((dep) => baseVersions.get(`${dep.type}:${dep.name}`) !== dep.version)
+    .map((dep) => dep.name);
 }
 
 async function scanDependencies(packageNames: string[], githubToken: string) {
