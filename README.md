@@ -1,30 +1,21 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dependency Obituary
 
-## Getting Started
+Dependency Obituary scans dependency files and reports package health using release activity, maintainer signals, issue health, downloads, and deprecation status.
 
-First, run the development server:
+## Score Badge
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Add this to your repo's `README.md`:
+
+```md
+![Dependency health](https://dep-obituary.vercel.app/api/badge/OWNER/REPO)
 ```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Example:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```md
+![Dependency health](https://dep-obituary.vercel.app/api/badge/facebook/react)
+```
 
-## Learn More
+Show Image:
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-
+![Dependency health](https://dep-obituary.vercel.app/api/badge/facebook/react)

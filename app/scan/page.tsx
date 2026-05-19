@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, FileJson, FileText, Loader2, UploadCloud } from "lucide-react";
-import type { ScanResponse } from "./api/scan/route";
+import type { ScanResponse } from "@/app/api/scan/route";
 import ResultsDashboard from "@/components/ResultsDashboard";
 
 type ScanState = "idle" | "scanning" | "done" | "error";
 
 const acceptedFiles = ["package.json", "requirements.txt"];
 
-export default function HomePage() {
+export default function ScanPage() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const progressTimer = useRef<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
