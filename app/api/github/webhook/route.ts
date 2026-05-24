@@ -6,6 +6,7 @@ import type { PackageMetrics, ScoreResult } from "@/lib/scorer";
 const GITHUB_API = "https://api.github.com";
 const API_VERSION = "2026-03-10";
 const MAX_DEPENDENCIES = 50;
+const REPORT_MARKER = "<!-- dependency-obituary-report -->";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -124,7 +125,7 @@ async function scanPullRequestAndComment(payload: PullRequestWebhookPayload, ins
     return { skipped: "No high or critical packages found", scannedPackageCount: results.length };
   }
 
-  await postPullRequestComment(payload, installationToken, buildRiskComment(riskyPackages));
+  await upsertPullRequestComment(payload, installationToken, buildRiskComment(riskyPackages));
   return {
     commented: true,
     scannedPackageCount: results.length,
@@ -312,7 +313,7 @@ function formatLastReleaseIssue(days: number) {
   return `Last release ${(days / 365).toFixed(1)} years ago`;
 }
 
-async function postPullRequestComment(
+async function upsertPullRequestComment(
   payload: PullRequestWebhookPayload,
   token: string,
   body: string
@@ -320,23 +321,46 @@ async function postPullRequestComment(
   const owner = payload.repository.owner.login;
   const repo = payload.repository.name;
   const issueNumber = payload.pull_request.number;
-  const response = await fetch(
-    `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
-      repo
-    )}/issues/${issueNumber}/comments`,
-    {
-      method: "POST",
-      headers: {
-        ...githubHeaders(token),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ body }),
-    }
-  );
+  const commentsUrl = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+    repo
+  )}/issues/${issueNumber}/comments`;
+  const existingCommentId = await findExistingReportComment(commentsUrl, token);
+  const response = existingCommentId
+    ? await fetch(`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/comments/${existingCommentId}`, {
+        method: "PATCH",
+        headers: {
+          ...githubHeaders(token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body }),
+      })
+    : await fetch(commentsUrl, {
+        method: "POST",
+        headers: {
+          ...githubHeaders(token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body }),
+      });
 
   if (!response.ok) {
-    throw new Error(`Failed to post PR comment (${response.status})`);
+    throw new Error(`Failed to upsert PR comment (${response.status})`);
   }
+}
+
+async function findExistingReportComment(commentsUrl: string, token: string) {
+  const response = await fetch(`${commentsUrl}?per_page=100`, {
+    headers: githubHeaders(token),
+  });
+
+  if (!response.ok) return null;
+
+  const comments = (await response.json()) as Array<{
+    id: number;
+    body?: string;
+    user?: { type?: string };
+  }>;
+  return comments.find((comment) => comment.user?.type === "Bot" && comment.body?.includes(REPORT_MARKER))?.id || null;
 }
 
 function buildRiskComment(results: ScoreResult[]) {
@@ -348,6 +372,7 @@ function buildRiskComment(results: ScoreResult[]) {
   });
 
   return [
+    REPORT_MARKER,
     "## 🪦 Dependency Obituary Report",
     "",
     "| Package | Score | Risk | Issue |",
