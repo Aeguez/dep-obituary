@@ -9,7 +9,6 @@ import {
 } from "@/lib/fetchers";
 import { calculateScore, ScoreResult } from "@/lib/scorer";
 import type { PackageMetrics } from "@/lib/scorer";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const maxDuration = 60; // Vercel: allow up to 60s for large dependency lists
 
@@ -22,16 +21,7 @@ export interface ScanResponse {
   scannedAt: string;
 }
 
-interface PackageCacheRow {
-  score: number;
-  risk_level: ScoreResult["riskLevel"];
-  metrics: ScoreResult["metrics"];
-  breakdown: ScoreResult["breakdown"];
-  summary: string | null;
-  alternative_suggestion: string | null;
-}
-
-const MAX_PACKAGES_PER_SCAN = 10;
+const MAX_PACKAGES_PER_SCAN = 5;
 const FAST_FETCH_TIMEOUT_MS = 4_000;
 
 async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FAST_FETCH_TIMEOUT_MS) {
@@ -45,82 +35,12 @@ async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FAS
   }
 }
 
-function scoreResultFromCache(packageName: string, row: PackageCacheRow): ScoreResult {
-  return {
-    name: packageName,
-    score: row.score,
-    riskLevel: row.risk_level,
-    breakdown: row.breakdown,
-    metrics: row.metrics,
-    summary: row.summary || "",
-    alternativeSuggestion: row.alternative_suggestion,
-  };
-}
-
-async function getCachedPackageResult(dep: ParsedDependency): Promise<ScoreResult | null> {
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return null;
-
-  try {
-    const { data, error } = await supabase
-      .from("package_cache")
-      .select("score,risk_level,metrics,breakdown,summary,alternative_suggestion")
-      .eq("package_name", dep.name)
-      .eq("ecosystem", dep.type)
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle<PackageCacheRow>();
-
-    if (error) {
-      console.warn(`Package cache lookup failed for ${dep.type}:${dep.name}:`, error.message);
-      return null;
-    }
-
-    return data ? scoreResultFromCache(dep.name, data) : null;
-  } catch (error) {
-    console.warn(`Package cache lookup failed for ${dep.type}:${dep.name}:`, error);
-    return null;
-  }
-}
-
-async function cachePackageResult(dep: ParsedDependency, result: ScoreResult): Promise<void> {
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return;
-
-  try {
-    const { error } = await supabase.from("package_cache").upsert(
-      {
-        package_name: dep.name,
-        ecosystem: dep.type,
-        score: result.score,
-        risk_level: result.riskLevel,
-        metrics: result.metrics,
-        breakdown: result.breakdown,
-        summary: result.summary,
-        alternative_suggestion: result.alternativeSuggestion,
-        cached_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      },
-      { onConflict: "package_name,ecosystem" }
-    );
-
-    if (error) {
-      console.warn(`Package cache write failed for ${dep.type}:${dep.name}:`, error.message);
-    }
-  } catch (error) {
-    console.warn(`Package cache write failed for ${dep.type}:${dep.name}:`, error);
-  }
-}
-
 async function scanDependency(dep: ParsedDependency): Promise<ScoreResult> {
-  const cached = await getCachedPackageResult(dep);
-  if (cached) return cached;
-
   // Public upload scans must return quickly on Vercel. Use registry data here and
-  // reserve full GitHub-heavy scans for the GitHub App and repo monitor flows.
+  // reserve Supabase/GitHub-heavy scans for the GitHub App and repo monitor flows.
   const metrics = await fetchQuickMetrics(dep);
   const result = calculateScore(metrics);
 
-  await cachePackageResult(dep, result);
   return result;
 }
 
@@ -239,30 +159,6 @@ async function fetchQuickPyPIMetrics(packageName: string): Promise<PackageMetric
   };
 }
 
-async function saveScanSession(response: ScanResponse, fileName: string): Promise<void> {
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return;
-
-  try {
-    const { error } = await supabase.from("scans").insert({
-      scan_id: response.scanId,
-      user_id: null,
-      file_name: fileName,
-      total_packages: response.totalPackages,
-      critical_count: response.criticalCount,
-      high_count: response.highCount,
-      results: response.results,
-      created_at: response.scannedAt,
-    });
-
-    if (error) {
-      console.warn(`Scan session save failed for ${response.scanId}:`, error.message);
-    }
-  } catch (error) {
-    console.warn(`Scan session save failed for ${response.scanId}:`, error);
-  }
-}
-
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -330,8 +226,6 @@ export async function POST(req: NextRequest) {
       scanId: crypto.randomUUID(),
       scannedAt: new Date().toISOString(),
     };
-
-    await saveScanSession(response, filename);
 
     return NextResponse.json(response);
   } catch (error) {
