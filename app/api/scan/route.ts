@@ -22,23 +22,34 @@ export interface ScanResponse {
 }
 
 const MAX_PACKAGES_PER_SCAN = 5;
-const FAST_FETCH_TIMEOUT_MS = 4_000;
+const FAST_FETCH_TIMEOUT_MS = 1_500;
 
 async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FAST_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }),
+      new Promise<Response>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`Request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }
 
 async function scanDependency(dep: ParsedDependency): Promise<ScoreResult> {
   // Public upload scans must return quickly on Vercel. Use registry data here and
   // reserve Supabase/GitHub-heavy scans for the GitHub App and repo monitor flows.
-  const metrics = await fetchQuickMetrics(dep);
+  const metrics = await fetchQuickMetrics(dep).catch((error) => {
+    console.warn(`Quick scan failed for ${dep.type}:${dep.name}; using fallback metrics.`, error);
+    return buildFallbackMetrics(dep);
+  });
   const result = calculateScore(metrics);
 
   return result;
@@ -66,21 +77,6 @@ async function fetchQuickNpmMetrics(packageName: string): Promise<PackageMetrics
     ? Math.floor((Date.now() - new Date(lastReleaseDate).getTime()) / 86400000)
     : 9999;
 
-  let weeklyDownloads = 0;
-  try {
-    const downloadsRes = await fetchWithTimeout(
-      `https://api.npmjs.org/downloads/point/last-week/${encoded}`,
-      undefined,
-      2_500
-    );
-    if (downloadsRes.ok) {
-      const downloads = await downloadsRes.json();
-      weeklyDownloads = downloads.downloads || 0;
-    }
-  } catch {
-    weeklyDownloads = 0;
-  }
-
   const repoUrl: string = registry.repository?.url || latestMeta.repository?.url || "";
   const ghMatch = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
 
@@ -93,11 +89,30 @@ async function fetchQuickNpmMetrics(packageName: string): Promise<PackageMetrics
     maintainersCount: registry.maintainers?.length || 1,
     openIssues: 0,
     closedIssues: 0,
-    weeklyDownloads,
+    weeklyDownloads: 0,
     downloadTrend: 0,
     isArchived: false,
     isDeprecated: !!latestMeta.deprecated,
     lastReleaseDate,
+    alternativeSuggestion: null,
+  };
+}
+
+function buildFallbackMetrics(dep: ParsedDependency): PackageMetrics {
+  return {
+    name: dep.name,
+    repoOwner: null,
+    repoName: null,
+    commitsLast90Days: 0,
+    daysSinceLastRelease: 9999,
+    maintainersCount: 1,
+    openIssues: 0,
+    closedIssues: 0,
+    weeklyDownloads: 0,
+    downloadTrend: 0,
+    isArchived: false,
+    isDeprecated: false,
+    lastReleaseDate: null,
     alternativeSuggestion: null,
   };
 }

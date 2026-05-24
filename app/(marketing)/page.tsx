@@ -236,12 +236,5 @@ async function getLandingMetrics() {
     scansResult.data?.reduce((sum, row) => sum + (row.total_packages || 0), 0) || 0;
   const developerCount = new Set((reposResult.data || []).map((row) => row.user_id)).size;
 
-  if (scansResult.error) {
-    console.warn("Failed to load landing scan metrics:", scansResult.error.message);
-  }
-  if (reposResult.error) {
-    console.warn("Failed to load landing developer metrics:", reposResult.error.message);
-  }
-
   return { packagesAnalyzedToday, developerCount };
 }

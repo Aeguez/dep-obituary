@@ -9,9 +9,6 @@ export function getSupabaseAdmin() {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
-    console.warn(
-      "Supabase admin client disabled: missing SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"
-    );
     supabaseAdmin = null;
     return supabaseAdmin;
   }
