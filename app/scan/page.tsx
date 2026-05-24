@@ -1,13 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, FileJson, FileText, Loader2, UploadCloud } from "lucide-react";
+import { AlertCircle, FileJson, FileText, GitBranch, Loader2, UploadCloud } from "lucide-react";
 import type { ScanResponse } from "@/app/api/scan/route";
 import ResultsDashboard from "@/components/ResultsDashboard";
 
 type ScanState = "idle" | "scanning" | "done" | "error";
 
 const acceptedFiles = ["package.json", "requirements.txt"];
+
+async function readScanPayload(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+  return contentType.includes("application/json")
+    ? response.json()
+    : { error: await response.text() };
+}
 
 export default function ScanPage() {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -17,6 +24,7 @@ export default function ScanPage() {
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<ScanResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState("");
   const isScanning = scanState === "scanning";
 
   const stopProgress = useCallback(() => {
@@ -68,10 +76,7 @@ export default function ScanPage() {
           body: formData,
         });
 
-        const contentType = response.headers.get("content-type") || "";
-        const payload = contentType.includes("application/json")
-          ? await response.json()
-          : { error: await response.text() };
+        const payload = await readScanPayload(response);
 
         if (!response.ok) {
           throw new Error(
@@ -103,6 +108,56 @@ export default function ScanPage() {
       }
     },
     [startProgress, stopProgress]
+  );
+
+  const scanRepo = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const trimmedRepoUrl = repoUrl.trim();
+      if (!trimmedRepoUrl) {
+        setError("Enter a GitHub repository URL.");
+        setScanState("error");
+        return;
+      }
+
+      setError(null);
+      setResults(null);
+      setScanState("scanning");
+      startProgress();
+
+      try {
+        const formData = new FormData();
+        formData.append("repoUrl", trimmedRepoUrl);
+
+        const response = await fetch("/api/scan", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = await readScanPayload(response);
+
+        if (!response.ok) {
+          throw new Error(payload.error || "The repo scan could not be completed.");
+        }
+
+        stopProgress();
+        setProgress(100);
+
+        window.setTimeout(() => {
+          setResults(payload as ScanResponse);
+          setScanState("done");
+        }, 250);
+      } catch (scanError) {
+        stopProgress();
+        setProgress(0);
+        setScanState("error");
+        setError(
+          scanError instanceof Error
+            ? scanError.message
+            : "Something went wrong while scanning the repo."
+        );
+      }
+    },
+    [repoUrl, startProgress, stopProgress]
   );
 
   const handleDrop = useCallback(
@@ -148,7 +203,7 @@ export default function ScanPage() {
           </div>
           <h1 className="text-3xl font-semibold text-white">Dependency Obituary</h1>
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-zinc-400">
-            Upload a dependency file to score package health across releases,
+            Upload a dependency file or scan a GitHub repository to score package health across releases,
             maintainers, GitHub activity, issues, and downloads.
           </p>
         </div>
@@ -247,6 +302,47 @@ export default function ScanPage() {
             </div>
           )}
         </div>
+
+        <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-[0.18em] text-zinc-600">
+          <div className="h-px flex-1 bg-zinc-800" />
+          or
+          <div className="h-px flex-1 bg-zinc-800" />
+        </div>
+
+        <form onSubmit={scanRepo} className="space-y-3">
+          <label htmlFor="repo-url" className="text-sm font-medium text-zinc-200">
+            Scan a GitHub repo
+          </label>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="relative flex-1">
+              <GitBranch
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500"
+                aria-hidden="true"
+              />
+              <input
+                id="repo-url"
+                type="url"
+                value={repoUrl}
+                disabled={isScanning}
+                onChange={(event) => setRepoUrl(event.target.value)}
+                placeholder="https://github.com/owner/repo"
+                className="h-11 w-full rounded-md border border-zinc-700 bg-zinc-950 pl-9 pr-3 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-orange-400 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={isScanning}
+              className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-md bg-zinc-100 px-4 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+            >
+              {isScanning ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+              )}
+              Scan repo
+            </button>
+          </div>
+        </form>
 
         {error && (
           <div className="mt-4 flex items-start gap-3 rounded-lg border border-red-900/80 bg-red-950/30 px-4 py-3 text-sm text-red-200">

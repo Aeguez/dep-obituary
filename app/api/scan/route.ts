@@ -7,6 +7,7 @@ import {
   parseRequirementsTxt,
   type ParsedDependency,
 } from "@/lib/fetchers";
+import { parseGitHubRepoUrl } from "@/lib/repo-utils";
 import { calculateScore, ScoreResult } from "@/lib/scorer";
 import type { PackageMetrics } from "@/lib/scorer";
 
@@ -23,6 +24,12 @@ export interface ScanResponse {
 
 const MAX_PACKAGES_PER_SCAN = 5;
 const FAST_FETCH_TIMEOUT_MS = 1_500;
+const GITHUB_FETCH_TIMEOUT_MS = 3_000;
+
+interface DependencyFile {
+  filename: string;
+  content: string;
+}
 
 async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FAST_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -117,6 +124,59 @@ function buildFallbackMetrics(dep: ParsedDependency): PackageMetrics {
   };
 }
 
+async function fetchRepoDependencyFiles(repoUrl: string): Promise<DependencyFile[]> {
+  const parsedRepo = parseGitHubRepoUrl(repoUrl);
+  if (!parsedRepo) {
+    throw new Error("Enter a valid GitHub repository URL.");
+  }
+
+  const files = await Promise.all(
+    ["package.json", "requirements.txt"].map(async (filename) => {
+      const content = await fetchGitHubFile(
+        parsedRepo.repoOwner,
+        parsedRepo.repoName,
+        filename
+      );
+      return content ? { filename, content } : null;
+    })
+  );
+
+  return files.filter((file): file is DependencyFile => file !== null);
+}
+
+async function fetchGitHubFile(owner: string, repo: string, path: string): Promise<string | null> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+  };
+  if (process.env.GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+
+  const response = await fetchWithTimeout(
+    `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
+    { headers },
+    GITHUB_FETCH_TIMEOUT_MS
+  ).catch(() => null);
+
+  if (!response || response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Could not read ${path} from GitHub (${response.status}).`);
+  }
+
+  const payload = await response.json();
+  if (Array.isArray(payload) || payload.type !== "file" || typeof payload.content !== "string") {
+    return null;
+  }
+
+  return Buffer.from(payload.content, "base64").toString("utf8");
+}
+
+function parseDependencyFile({ filename, content }: DependencyFile): ParsedDependency[] {
+  return filename.endsWith("requirements.txt") || filename.endsWith(".txt")
+    ? parseRequirementsTxt(content)
+    : parsePackageJson(content);
+}
+
 async function fetchQuickPyPIMetrics(packageName: string): Promise<PackageMetrics> {
   const encoded = encodeURIComponent(packageName);
   const res = await fetchWithTimeout(`https://pypi.org/pypi/${encoded}/json`, {
@@ -179,26 +239,28 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const textContent = formData.get("content") as string | null;
+    const repoUrl = String(formData.get("repoUrl") || "").trim();
 
-    let content: string;
-    let filename: string;
+    let deps: ParsedDependency[];
 
-    if (file) {
-      content = await file.text();
-      filename = file.name;
+    if (repoUrl) {
+      const dependencyFiles = await fetchRepoDependencyFiles(repoUrl);
+      if (dependencyFiles.length === 0) {
+        return NextResponse.json(
+          { error: "No package.json or requirements.txt file found at the repo root." },
+          { status: 404 }
+        );
+      }
+      deps = dependencyFiles.flatMap(parseDependencyFile);
+    } else if (file) {
+      deps = parseDependencyFile({ filename: file.name, content: await file.text() });
     } else if (textContent) {
-      content = textContent;
-      filename = (formData.get("filename") as string) || "package.json";
+      deps = parseDependencyFile({
+        filename: (formData.get("filename") as string) || "package.json",
+        content: textContent,
+      });
     } else {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
-    }
-
-    // Parse dependencies based on file type
-    let deps;
-    if (filename.endsWith("requirements.txt") || filename.endsWith(".txt")) {
-      deps = parseRequirementsTxt(content);
-    } else {
-      deps = parsePackageJson(content);
+      return NextResponse.json({ error: "No file or GitHub repo URL provided" }, { status: 400 });
     }
 
     if (deps.length === 0) {
