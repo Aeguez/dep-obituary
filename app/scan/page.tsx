@@ -68,9 +68,18 @@ export default function ScanPage() {
           body: formData,
         });
 
-        const payload = await response.json();
+        const contentType = response.headers.get("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json()
+          : { error: await response.text() };
+
         if (!response.ok) {
-          throw new Error(payload.error || "The scan could not be completed.");
+          throw new Error(
+            payload.error ||
+              (response.status === 504
+                ? "The scan took too long. Try a smaller dependency file or scan fewer packages."
+                : "The scan could not be completed.")
+          );
         }
 
         stopProgress();
